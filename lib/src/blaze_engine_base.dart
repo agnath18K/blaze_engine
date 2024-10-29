@@ -13,6 +13,9 @@ class BlazeDownloader {
   final int segmentCount;
   final int workerCount;
   final int maxRetries;
+  final void Function(double progress)? onProgress;
+  final void Function(String filePath)? onComplete;
+  final void Function(String error)? onError;
 
   BlazeDownloader({
     required this.downloadUrl,
@@ -23,6 +26,9 @@ class BlazeDownloader {
     this.segmentCount = 20,
     this.workerCount = 4,
     this.maxRetries = 3,
+    this.onProgress,
+    this.onComplete,
+    this.onError,
   });
 
   Future<void> startDownload() async {
@@ -68,7 +74,7 @@ class BlazeDownloader {
           await _downloadSegmentedFixedIsolates(fileName, filePath, totalSize);
         }
       }
-
+      onComplete?.call(filePath);
       DateTime endTime = DateTime.now();
       _debugPrint("Download completed at: ${endTime.toIso8601String()}");
 
@@ -83,6 +89,7 @@ class BlazeDownloader {
       _debugPrint("${difference.inSeconds % 60} seconds");
     } catch (e) {
       _debugPrint('Error during download: $e');
+      onError?.call(e.toString());
       _debugPrint("An error occurred during the download process: $e");
     }
   }
@@ -145,6 +152,7 @@ class BlazeDownloader {
       }
     } catch (e) {
       _debugPrint('Error while getting file size: $e');
+      onError?.call(e.toString());
     }
     return 0;
   }
@@ -201,6 +209,7 @@ class BlazeDownloader {
             ]);
           }
         } else if (message is String && message.startsWith('Error')) {
+          onError?.call("Segment Error");
           downloadFailed = true;
           _debugPrint(message); // Log error
         } else {
@@ -255,6 +264,7 @@ class BlazeDownloader {
       }
     } catch (e) {
       _debugPrint('Error while getting file size: $e');
+      onError?.call(e.toString());
     }
     return 0;
   }
@@ -358,6 +368,7 @@ class BlazeDownloader {
       _debugPrint('Merged file created at: ${outputFile.path}');
     } catch (e) {
       _debugPrint('Error merging file segments: $e');
+      onError?.call(e.toString());
     } finally {
       await sink.close();
     }
@@ -373,6 +384,7 @@ class BlazeDownloader {
         }
       } catch (e) {
         _debugPrint('Error deleting segment file: $segmentFile, Error: $e');
+        onError?.call(e.toString());
       }
     }
   }
@@ -381,10 +393,9 @@ class BlazeDownloader {
     return await _getFileSizeFromUrl(url);
   }
 
-  
-
   void _printProgress(int completedSegments, int totalSegments) {
     final progress = (completedSegments / totalSegments) * 100;
+    onProgress?.call(progress);
     const barLength = 40;
     final filledLength = (progress / 100 * barLength).round();
     final bar = '=' * filledLength + '-' * (barLength - filledLength);
@@ -419,6 +430,7 @@ class BlazeDownloader {
       }
     } catch (e) {
       _debugPrint('Error while checking resume capability: $e');
+      onError?.call(e.toString());
     }
     return false;
   }
@@ -461,6 +473,7 @@ class BlazeDownloader {
     for (var port in ports) {
       final result = await port.first;
       if (result is String && result.startsWith('Error')) {
+        onError?.call("Segment download error");
         downloadFailed = true;
       }
     }
@@ -508,6 +521,7 @@ class BlazeDownloader {
       }
     } catch (e) {
       print('Error downloading segment: $e');
+
       sendPort.send('Error downloading segment $startByte-$endByte: $e');
     }
   }

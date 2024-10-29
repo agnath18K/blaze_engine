@@ -5,6 +5,27 @@ import 'package:test/test.dart';
 void main() {
   final String downloadDirectory = 'download';
 
+  // List of dummy files with various sizes
+  final List<Map<String, String>> testFiles = [
+    {
+      'url':
+          'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso.zsync',
+      'filename': 'ubuntu-22.04.5-desktop-amd64.iso.zsync'
+    },
+    {
+      'url':
+          'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso.zsync',
+      'filename': 'ubuntu-22.04.5-live-server-amd64.iso.zsync'
+    },
+  ];
+
+  final List<Map<String, int>> combinations = [
+    {'workerCount': 1, 'segmentCount': 1},
+    {'workerCount': 2, 'segmentCount': 4},
+    {'workerCount': 4, 'segmentCount': 8},
+    {'workerCount': 8, 'segmentCount': 16},
+  ];
+
   setUp(() async {
     // Create the download directory before each test
     if (!Directory(downloadDirectory).existsSync()) {
@@ -20,92 +41,159 @@ void main() {
     }
   });
 
-  Future<void> verifyDownload(BlazeDownloader downloader, String downloadUrl,
-      String expectedFileName) async {
-    final String downloadedFilePath = '$downloadDirectory/$expectedFileName';
-
+  Future<void> verifyDownload(
+      BlazeDownloader downloader, String expectedFilePath) async {
     // Check if the downloaded file exists
-    expect(File(downloadedFilePath).existsSync(), isTrue,
-        reason: 'Downloaded file should exist at: $downloadedFilePath');
+    expect(File(expectedFilePath).existsSync(), isTrue,
+        reason: 'Downloaded file should exist at: $expectedFilePath');
 
     // Check the integrity of the downloaded file
     final int expectedFileSize =
-        await downloader.getFileSizeFromUrl(downloadUrl);
-    final int actualFileSize = await File(downloadedFilePath).length();
+        await downloader.getFileSizeFromUrl(downloader.downloadUrl);
+    final int actualFileSize = await File(expectedFilePath).length();
     expect(actualFileSize, equals(expectedFileSize),
         reason:
             'Downloaded file size ($actualFileSize) should match expected size ($expectedFileSize).');
   }
 
-  test('Standard Download Test', () async {
-    final String downloadUrl =
-        'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso.zsync';
-    final String expectedFileName =
-        'ubuntu-22.04.5-live-server-amd64.iso.zsync';
+  for (var testFile in testFiles) {
+    final String downloadUrl = testFile['url']!;
+    final String expectedFileName = testFile['filename']!;
+    final String expectedFilePath = '$downloadDirectory/$expectedFileName';
 
-    final BlazeDownloader downloader = BlazeDownloader(
-      downloadUrl: downloadUrl,
-      customDirectory: downloadDirectory,
-      allowResume: false, // Resume is disabled
-      sequentialDownload: true, // Sequential download is enabled
-      enableWorkerPooling: false, // Worker pooling is disabled
-      segmentCount: 1, // Only one segment for sequential download
-      workerCount: 1, // Only one worker for sequential download
-      maxRetries: 3,
-    );
+    test(
+        'Standard Download Test for $expectedFileName with Sequential Download',
+        () async {
+      final Stopwatch stopwatch = Stopwatch()..start();
 
-    // Start the download
-    await downloader.startDownload();
+      final BlazeDownloader downloader = BlazeDownloader(
+        downloadUrl: downloadUrl,
+        customDirectory: downloadDirectory,
+        allowResume: false,
+        sequentialDownload: true,
+        enableWorkerPooling: false,
+        segmentCount: 8,
+        workerCount: 4,
+        maxRetries: 3,
+      );
 
-    // Verify the download
-    await verifyDownload(downloader, downloadUrl, expectedFileName);
-  });
+      await downloader.startDownload();
+      await verifyDownload(downloader, expectedFilePath);
 
-  test('Segmented Download with Worker Pooling Enabled', () async {
-    final String downloadUrl =
-        'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso.zsync';
-    final String expectedFileName =
-        'ubuntu-22.04.5-live-server-amd64.iso.zsync';
+      stopwatch.stop();
+      final int fileSize = await File(expectedFilePath).length();
+      final double transferSpeed =
+          fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-    final BlazeDownloader downloader = BlazeDownloader(
-      downloadUrl: downloadUrl,
-      customDirectory: downloadDirectory,
-      allowResume: false, // Resume is disabled
-      sequentialDownload: false, // Sequential download is disabled
-      enableWorkerPooling: true, // Worker pooling is enabled
-      segmentCount: 1, // Only one segment
-      workerCount: 1, // Only one worker
-      maxRetries: 3,
-    );
+      print(
+          'Time taken for Standard Download Test for $expectedFileName: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+    });
 
-    // Start the download
-    await downloader.startDownload();
+    test(
+        'Segmented Download Test for $expectedFileName with Worker Pooling Enabled',
+        () async {
+      final Stopwatch stopwatch = Stopwatch()..start();
 
-    // Verify the download
-    await verifyDownload(downloader, downloadUrl, expectedFileName);
-  });
+      final BlazeDownloader downloader = BlazeDownloader(
+        downloadUrl: downloadUrl,
+        customDirectory: downloadDirectory,
+        allowResume: false,
+        sequentialDownload: false,
+        enableWorkerPooling: true,
+        segmentCount: 8,
+        workerCount: 4,
+        maxRetries: 3,
+      );
 
-  test('Segmented Download with Fixed Isolates', () async {
-    final String downloadUrl =
-        'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso.zsync';
-    final String expectedFileName =
-        'ubuntu-22.04.5-live-server-amd64.iso.zsync';
+      await downloader.startDownload();
+      await verifyDownload(downloader, expectedFilePath);
 
-    final BlazeDownloader downloader = BlazeDownloader(
-      downloadUrl: downloadUrl,
-      customDirectory: downloadDirectory,
-      allowResume: false, // Resume is disabled
-      sequentialDownload: false, // Sequential download is disabled
-      enableWorkerPooling: false, // Worker pooling is disabled
-      segmentCount: 1, // Only one segment
-      workerCount: 1, // Only one worker
-      maxRetries: 3,
-    );
+      stopwatch.stop();
+      final int fileSize = await File(expectedFilePath).length();
+      final double transferSpeed =
+          fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-    // Start the download
-    await downloader.startDownload();
+      print(
+          'Time taken for Segmented Download with Worker Pooling for $expectedFileName: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+    });
 
-    // Verify the download
-    await verifyDownload(downloader, downloadUrl, expectedFileName);
-  });
+    test('Segmented Download for $expectedFileName with Fixed Isolates',
+        () async {
+      final Stopwatch stopwatch = Stopwatch()..start();
+
+      final BlazeDownloader downloader = BlazeDownloader(
+        downloadUrl: downloadUrl,
+        customDirectory: downloadDirectory,
+        allowResume: false,
+        sequentialDownload: false,
+        enableWorkerPooling: false,
+        segmentCount: 8,
+        workerCount: 4,
+        maxRetries: 3,
+      );
+
+      await downloader.startDownload();
+      await verifyDownload(downloader, expectedFilePath);
+
+      stopwatch.stop();
+      final int fileSize = await File(expectedFilePath).length();
+      final double transferSpeed =
+          fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
+
+      print(
+          'Time taken for Segmented Download with Fixed Isolates for $expectedFileName: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+    });
+
+    String bestConfig = '';
+    Duration bestTime = Duration(days: 365);
+
+    for (var combo in combinations) {
+      final int workerCount = combo['workerCount']!;
+      final int segmentCount = combo['segmentCount']!;
+
+      test(
+          'Download Test for $expectedFileName with Worker Count: $workerCount and Segment Count: $segmentCount',
+          () async {
+        final Stopwatch stopwatch = Stopwatch()..start();
+
+        final BlazeDownloader downloader = BlazeDownloader(
+          downloadUrl: downloadUrl,
+          customDirectory: downloadDirectory,
+          allowResume: false,
+          sequentialDownload: false,
+          enableWorkerPooling: true,
+          segmentCount: segmentCount,
+          workerCount: workerCount,
+          maxRetries: 3,
+        );
+
+        await downloader.startDownload();
+        await verifyDownload(downloader, expectedFilePath);
+
+        stopwatch.stop();
+        final int fileSize = await File(expectedFilePath).length();
+        final double transferSpeed =
+            fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
+
+        print(
+            'Time taken for $expectedFileName with Worker Count: $workerCount and Segment Count: $segmentCount: ${stopwatch.elapsed}');
+        print(
+            'Average transfer speed for Worker Count: $workerCount and Segment Count: $segmentCount: ${transferSpeed.toStringAsFixed(2)} MB/s');
+
+        if (stopwatch.elapsed < bestTime) {
+          bestTime = stopwatch.elapsed;
+          bestConfig =
+              'Worker Count: $workerCount, Segment Count: $segmentCount';
+        }
+      });
+    }
+
+    tearDownAll(() {
+      print(
+          'Best configuration for $expectedFileName: $bestConfig with time: $bestTime');
+    });
+  }
 }
