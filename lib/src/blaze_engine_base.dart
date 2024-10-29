@@ -7,16 +7,22 @@ bool isDebugModeEnabled = false;
 class BlazeDownloader {
   final String downloadUrl;
   final String customDirectory;
+  final bool sequentialDownload;
+  final bool enablePoolQueue;
+  final bool allowResume;
   final int segmentCount;
   final int workerCount;
-  final int maxRetries; // Maximum retries for failed downloads
+  final int maxRetries;
 
   BlazeDownloader({
     required this.downloadUrl,
     required this.customDirectory,
+    this.allowResume = true,
+    this.sequentialDownload = true,
+    this.enablePoolQueue = true,
     this.segmentCount = 20,
     this.workerCount = 4,
-    this.maxRetries = 3, // Default to 3 retries
+    this.maxRetries = 3,
   });
 
   Future<void> startDownload() async {
@@ -32,7 +38,26 @@ class BlazeDownloader {
         return;
       }
 
-      await _downloadSegmentedFile(fileName, filePath, totalSize);
+      if (sequentialDownload) {
+        //sequentialDownload handle
+        final canResume = await _supportsRangeRequests(downloadUrl);
+        if (canResume) {
+          await _downloadSequential(filePath, totalSize);
+        } else {
+          print(
+              'Resume capability not supported, downloading the entire file...');
+          await _downloadSequential(filePath, totalSize);
+        }
+      } else {
+        if (enablePoolQueue) {
+          // download segmented pool queue
+          await _downloadSegmentedFilePoolQueue(fileName, filePath, totalSize);
+        } else {
+          await _downloadSegmentedFixedIsolates(fileName, filePath, totalSize);
+          //fixed isoate
+        }
+      }
+
       DateTime endTime = DateTime.now();
       print("End Time : ${DateTime.now()}");
 
@@ -47,6 +72,41 @@ class BlazeDownloader {
       print("${difference.inSeconds % 60} seconds");
     } catch (e) {
       _debugPrint('Error during download: $e');
+    }
+  }
+
+  Future<void> _downloadSequential(String filePath, int totalSize) async {
+    final file = File(filePath);
+    int startByte = 0;
+
+    if (allowResume && await file.exists()) {
+      startByte = await _getFileSizeFromPath(filePath);
+      if (startByte >= totalSize) {
+        print('File already downloaded: $filePath');
+        return;
+      }
+      print('Resuming download from byte: $startByte');
+    } else {
+      print('Starting new download...');
+    }
+
+    final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
+
+    final endByte = totalSize - 1;
+    request.headers.add('Range', 'bytes=$startByte-$endByte');
+
+    final response = await request.close();
+
+    if (response.statusCode == 206) {
+      await response.pipe(file.openWrite(mode: FileMode.append));
+      await _checkFileIntegrity(filePath, totalSize);
+    } else if (response.statusCode == 200) {
+      print(
+          'Server does not support range requests. Downloading the entire file...');
+      await response.pipe(file.openWrite());
+      await _checkFileIntegrity(filePath, totalSize);
+    } else {
+      print('Download failed with status code: ${response.statusCode}');
     }
   }
 
@@ -77,7 +137,7 @@ class BlazeDownloader {
     return 0;
   }
 
-  Future<void> _downloadSegmentedFile(
+  Future<void> _downloadSegmentedFilePoolQueue(
       String fileName, String filePath, int totalSize) async {
     final segmentSize = (totalSize / segmentCount).ceil();
     List<ReceivePort> ports = [];
@@ -108,7 +168,8 @@ class BlazeDownloader {
       final port = ReceivePort();
       ports.add(port);
 
-      final worker = await Isolate.spawn(_workerMain, [port.sendPort, this]);
+      final worker =
+          await Isolate.spawn(_workerMainPoolQueue, [port.sendPort, this]);
       workers.add(worker);
 
       port.listen((message) async {
@@ -185,7 +246,7 @@ class BlazeDownloader {
     return 0;
   }
 
-  static void _workerMain(List<dynamic> args) async {
+  static void _workerMainPoolQueue(List<dynamic> args) async {
     SendPort mainSendPort = args[0];
     BlazeDownloader downloader = args[1]; // Access the downloader instance
 
@@ -323,6 +384,118 @@ class BlazeDownloader {
   void _debugPrint(String message) {
     if (isDebugModeEnabled) {
       print(message);
+    }
+  }
+
+  Future<bool> _supportsRangeRequests(String url) async {
+    try {
+      final request = await HttpClient().headUrl(Uri.parse(url));
+      final response = await request.close();
+
+      if (response.statusCode == 200) {
+        final acceptRanges = response.headers.value('Accept-Ranges');
+        if (acceptRanges == 'bytes') {
+          print('Server supports resume capability.');
+          return true;
+        } else {
+          print('Server does not support resume capability.');
+        }
+      } else {
+        print(
+            'Failed to check resume capability with status code: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error while checking resume capability: $e');
+    }
+    return false;
+  }
+
+  Future<void> _downloadSegmentedFixedIsolates(
+      String fileName, String filePath, int totalSize) async {
+    final segmentSize =
+        (totalSize / segmentCount).ceil(); // Divide into specified segments
+    List<ReceivePort> ports = [];
+    List<String> segmentFiles =
+        []; // List to hold paths of downloaded segment files
+    bool downloadFailed = false;
+
+    // Create and spawn isolates for downloading segments
+    for (int i = 0; i < segmentCount; i++) {
+      final startByte = i * segmentSize;
+      final endByte = (i == segmentCount - 1)
+          ? totalSize - 1
+          : startByte + segmentSize - 1; // last segment takes remaining bytes
+
+      final port = ReceivePort();
+      ports.add(port);
+
+      // Create a temporary file for each segment
+      final segmentFile = await _createFile('${fileName}_part$i');
+      segmentFiles.add(segmentFile);
+
+      // Spawn an isolate for downloading each segment
+      await Isolate.spawn(_downloadSegmentFixedIsolates,
+          [port.sendPort, downloadUrl, segmentFile, startByte, endByte]);
+
+      print('Downloading segment:');
+      print('URL: $downloadUrl');
+      print('Segment file path: $segmentFile');
+      print('Start byte: $startByte');
+      print('End byte: $endByte');
+    }
+
+    // Wait for all segments to be downloaded
+    for (var port in ports) {
+      final result = await port.first;
+      if (result is String && result.startsWith('Error')) {
+        downloadFailed = true;
+      }
+    }
+
+    if (downloadFailed) {
+      print('Download failed, cleaning up segment files.');
+      await _cleanupSegmentFiles(segmentFiles);
+      return;
+    }
+
+    // Merge the downloaded segments into a single output file
+    await _mergeFileSegments(segmentFiles, filePath);
+
+    // Check integrity of the merged file
+    await _checkFileIntegrity(filePath, totalSize);
+
+    // Cleanup segment files after successful merge
+    await _cleanupSegmentFiles(segmentFiles);
+  }
+
+  static Future<void> _downloadSegmentFixedIsolates(List<dynamic> args) async {
+    final SendPort sendPort = args[0];
+    final String url = args[1];
+    final String segmentFilePath = args[2];
+    final int startByte = args[3];
+    final int endByte = args[4];
+
+    try {
+      final request = await HttpClient().getUrl(Uri.parse(url));
+      request.headers.add('Range', 'bytes=$startByte-$endByte');
+
+      final response = await request.close();
+
+      if (response.statusCode == 206 || response.statusCode == 200) {
+        final file = File(segmentFilePath);
+
+        // Write the received bytes to the segment file
+        await response.pipe(file.openWrite());
+
+        // Notify the main isolate that this segment has been downloaded
+        sendPort.send('Segment $startByte-$endByte downloaded successfully.');
+      } else {
+        sendPort.send(
+            'Download failed with status code: ${response.statusCode} for segment $startByte-$endByte');
+      }
+    } catch (e) {
+      print('Error downloading segment: $e');
+      sendPort.send('Error downloading segment $startByte-$endByte: $e');
     }
   }
 }

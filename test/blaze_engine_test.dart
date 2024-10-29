@@ -5,7 +5,7 @@ void main() {
   test('Download file from URL', () async {
     final downloader = BlazeDownloader(
         downloadUrl:
-            'https://releases.ubuntu.com/14.04.6/ubuntu-14.04.6-server-amd64.template',
+            'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso.zsync',
         customDirectory: 'download');
     await downloader.startDownload();
   });
