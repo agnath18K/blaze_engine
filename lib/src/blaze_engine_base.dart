@@ -94,51 +94,50 @@ class BlazeDownloader {
     }
   }
 
-Future<void> _downloadSequential(String filePath, int totalSize) async {
-  final file = File(filePath);
-  int startByte = 0;
+  Future<void> _downloadSequential(String filePath, int totalSize) async {
+    final file = File(filePath);
+    int startByte = 0;
 
-  if (allowResume && await file.exists()) {
-    startByte = await _getFileSizeFromPath(filePath);
-    if (startByte >= totalSize) {
-      _debugPrint('File already downloaded: $filePath');
-      return;
-    }
-    _debugPrint('Resuming download from byte: $startByte');
-  } else {
-    _debugPrint('Starting new download...');
-  }
-
-  final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
-
-  final endByte = totalSize - 1;
-  request.headers.add('Range', 'bytes=$startByte-$endByte');
-
-  final response = await request.close();
-
-  if (response.statusCode == 206 || response.statusCode == 200) {
-    // Initialize bytes downloaded for this session
-    int bytesDownloaded = startByte;
-
-    final fileSink = file.openWrite(mode: FileMode.append);
-    
-    await for (var data in response) {
-      fileSink.add(data);
-      bytesDownloaded += data.length;
-
-      // Calculate progress
-      final progress = (bytesDownloaded / totalSize) * 100;
-      onProgress?.call(progress); // Update progress
-      _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+    if (allowResume && await file.exists()) {
+      startByte = await _getFileSizeFromPath(filePath);
+      if (startByte >= totalSize) {
+        _debugPrint('File already downloaded: $filePath');
+        return;
+      }
+      _debugPrint('Resuming download from byte: $startByte');
+    } else {
+      _debugPrint('Starting new download...');
     }
 
-    await fileSink.close();
-    await _checkFileIntegrity(filePath, totalSize);
-  } else {
-    _debugPrint('Download failed with status code: ${response.statusCode}');
-  }
-}
+    final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
 
+    final endByte = totalSize - 1;
+    request.headers.add('Range', 'bytes=$startByte-$endByte');
+
+    final response = await request.close();
+
+    if (response.statusCode == 206 || response.statusCode == 200) {
+      // Initialize bytes downloaded for this session
+      int bytesDownloaded = startByte;
+
+      final fileSink = file.openWrite(mode: FileMode.append);
+
+      await for (var data in response) {
+        fileSink.add(data);
+        bytesDownloaded += data.length;
+
+        // Calculate progress
+        final progress = (bytesDownloaded / totalSize) * 100;
+        onProgress?.call(progress); // Update progress
+        _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+      }
+
+      await fileSink.close();
+      await _checkFileIntegrity(filePath, totalSize);
+    } else {
+      _debugPrint('Download failed with status code: ${response.statusCode}');
+    }
+  }
 
   Future<String> _createFile(String fileName) async {
     final directory = Directory(customDirectory);
@@ -168,82 +167,84 @@ Future<void> _downloadSequential(String filePath, int totalSize) async {
     return 0;
   }
 
-Future<void> _downloadSegmentedWithWorkerPool(
-    String fileName, String filePath, int totalSize) async {
-  final segmentSize = (totalSize / segmentCount).ceil();
-  List<ReceivePort> workerReceivePorts = [];
-  List<String> segmentFiles = [];
-  List<Map<String, int>> downloadSegmentQueue = [];
-  int bytesDownloaded = 0; // Track total bytes downloaded across segments
+  Future<void> _downloadSegmentedWithWorkerPool(
+      String fileName, String filePath, int totalSize) async {
+    final segmentSize = (totalSize / segmentCount).ceil();
+    List<ReceivePort> workerReceivePorts = [];
+    List<String> segmentFiles = [];
+    List<Map<String, int>> downloadSegmentQueue = [];
+    int bytesDownloaded = 0; // Track total bytes downloaded across segments
 
-  // Prepare segment queue and segment file paths
-  for (int i = 0; i < segmentCount; i++) {
-    final startByte = i * segmentSize;
-    final endByte = (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
-    downloadSegmentQueue.add({'startByte': startByte, 'endByte': endByte});
+    // Prepare segment queue and segment file paths
+    for (int i = 0; i < segmentCount; i++) {
+      final startByte = i * segmentSize;
+      final endByte =
+          (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
+      downloadSegmentQueue.add({'startByte': startByte, 'endByte': endByte});
 
-    // Create a segment file path
-    final segmentFile = await _createFile('${fileName}_part$i');
-    segmentFiles.add(segmentFile);
-  }
+      // Create a segment file path
+      final segmentFile = await _createFile('${fileName}_part$i');
+      segmentFiles.add(segmentFile);
+    }
 
-  _debugPrint('Starting worker creation with $workerCount workers.');
-  bool downloadFailed = false;
-  List<Isolate> workers = [];
+    _debugPrint('Starting worker creation with $workerCount workers.');
+    bool downloadFailed = false;
+    List<Isolate> workers = [];
 
-  for (int i = 0; i < workerCount; i++) {
-    final port = ReceivePort();
-    workerReceivePorts.add(port);
+    for (int i = 0; i < workerCount; i++) {
+      final port = ReceivePort();
+      workerReceivePorts.add(port);
 
-    final worker = await Isolate.spawn(_workerMainForPoolQueue, [port.sendPort, this]);
-    workers.add(worker);
+      final worker =
+          await Isolate.spawn(_workerMainForPoolQueue, [port.sendPort, this]);
+      workers.add(worker);
 
-    port.listen((message) async {
-      if (message is SendPort) {
-        // Assign tasks to the worker
-        while (downloadSegmentQueue.isNotEmpty) {
-          final task = downloadSegmentQueue.removeAt(0);
-          message.send([
-            task['startByte'],
-            task['endByte'],
-            downloadUrl,
-            segmentFiles[segmentFiles.length - downloadSegmentQueue.length - 1],
-            maxRetries
-          ]);
+      port.listen((message) async {
+        if (message is SendPort) {
+          // Assign tasks to the worker
+          while (downloadSegmentQueue.isNotEmpty) {
+            final task = downloadSegmentQueue.removeAt(0);
+            message.send([
+              task['startByte'],
+              task['endByte'],
+              downloadUrl,
+              segmentFiles[
+                  segmentFiles.length - downloadSegmentQueue.length - 1],
+              maxRetries
+            ]);
+          }
+        } else if (message is String && message.startsWith('Error')) {
+          onError?.call("Segment Error");
+          downloadFailed = true;
+        } else if (message is Map<String, dynamic>) {
+          // Update downloaded bytes and calculate progress
+          bytesDownloaded += message['bytesDownloaded'] as int;
+          final progress = (bytesDownloaded / totalSize) * 100;
+          onProgress?.call(progress);
+          _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+
+          if (bytesDownloaded >= totalSize) {
+            _debugPrint('Download Complete!');
+          }
         }
-      } else if (message is String && message.startsWith('Error')) {
-        onError?.call("Segment Error");
-        downloadFailed = true;
-      } else if (message is Map<String, dynamic>) {
-        // Update downloaded bytes and calculate progress
-        bytesDownloaded += message['bytesDownloaded'] as int;
-        final progress = (bytesDownloaded / totalSize) * 100;
-        onProgress?.call(progress);
-        _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
-        
-        if (bytesDownloaded >= totalSize) {
-          _debugPrint('Download Complete!');
-        }
-      }
-    });
-  }
+      });
+    }
 
-  // Wait for all segments to be processed
-  while (bytesDownloaded < totalSize && !downloadFailed) {
-    await Future.delayed(Duration(milliseconds: 100)); 
-  }
+    // Wait for all segments to be processed
+    while (bytesDownloaded < totalSize && !downloadFailed) {
+      await Future.delayed(Duration(milliseconds: 100));
+    }
 
-  if (downloadFailed) {
-    _debugPrint('Download failed, cleaning up segment files.');
+    if (downloadFailed) {
+      _debugPrint('Download failed, cleaning up segment files.');
+      await _cleanupSegmentFiles(segmentFiles);
+      return;
+    }
+
+    await _mergeFileSegments(segmentFiles, filePath);
+    await _checkFileIntegrity(filePath, totalSize);
     await _cleanupSegmentFiles(segmentFiles);
-    return;
   }
-
-  await _mergeFileSegments(segmentFiles, filePath);
-  await _checkFileIntegrity(filePath, totalSize);
-  await _cleanupSegmentFiles(segmentFiles);
-}
-
 
   Future<int> _getFileSizeFromPath(String filePath) async {
     try {
@@ -261,90 +262,48 @@ Future<void> _downloadSegmentedWithWorkerPool(
     return 0;
   }
 
-static void _workerMainForPoolQueue(List<dynamic> args) async {
-  SendPort mainSendPort = args[0];
-  BlazeDownloader downloader = args[1];
-  
-  ReceivePort workerReceivePort = ReceivePort();
-  mainSendPort.send(workerReceivePort.sendPort);
-  
-  workerReceivePort.listen((message) async {
-    if (message is List<dynamic>) {
-      final startByte = message[0];
-      final endByte = message[1];
-      final downloadUrl = message[2];
-      final segmentFilePath = message[3];
-      final maxRetries = message[4];
-      
-      int segmentBytesDownloaded = 0;
+  static void _workerMainForPoolQueue(List<dynamic> args) async {
+    SendPort mainSendPort = args[0];
 
-      try {
-        final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
-        request.headers.add('Range', 'bytes=$startByte-$endByte');
-        final response = await request.close();
+    ReceivePort workerReceivePort = ReceivePort();
+    mainSendPort.send(workerReceivePort.sendPort);
 
-        if (response.statusCode == 206) {
-          final file = File(segmentFilePath);
-          final fileSink = file.openWrite();
+    workerReceivePort.listen((message) async {
+      if (message is List<dynamic>) {
+        final startByte = message[0];
+        final endByte = message[1];
+        final downloadUrl = message[2];
+        final segmentFilePath = message[3];
 
-          await for (var data in response) {
-            fileSink.add(data);
-            segmentBytesDownloaded += data.length;
-            
-            // Send progress update to main isolate
-            mainSendPort.send({'bytesDownloaded': data.length});
+        try {
+          final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
+          request.headers.add('Range', 'bytes=$startByte-$endByte');
+          final response = await request.close();
+
+          if (response.statusCode == 206) {
+            final file = File(segmentFilePath);
+            final fileSink = file.openWrite();
+
+            await for (var data in response) {
+              fileSink.add(data);
+
+              // Send progress update to main isolate
+              mainSendPort.send({'bytesDownloaded': data.length});
+            }
+            await fileSink.close();
+
+            mainSendPort
+                .send('Segment $startByte-$endByte downloaded successfully.');
+          } else {
+            mainSendPort
+                .send('Error: Server response was ${response.statusCode}');
           }
-          await fileSink.close();
-          
-          mainSendPort.send('Segment $startByte-$endByte downloaded successfully.');
-        } else {
-          mainSendPort.send('Error: Server response was ${response.statusCode}');
+        } catch (e) {
+          mainSendPort
+              .send('Error downloading segment $startByte-$endByte: $e');
         }
-      } catch (e) {
-        mainSendPort.send('Error downloading segment $startByte-$endByte: $e');
       }
-    }
-  });
-}
-
-
-  Future<String> _downloadSegment(int startByte, int endByte, String url,
-      String segmentFilePath, int maxRetries) async {
-    int attempt = 0;
-
-    while (attempt < maxRetries) {
-      try {
-        final request = await HttpClient().getUrl(Uri.parse(url));
-        request.headers.add('Range', 'bytes=$startByte-$endByte');
-        final response = await request.close();
-
-        if (response.statusCode == 206) {
-          _debugPrint('Downloading segment $startByte-$endByte'); // Debugging
-          final file = File(segmentFilePath);
-          final fileSink = file.openWrite();
-
-          int byteCount = 0;
-          await for (var data in response) {
-            fileSink.add(data);
-            byteCount += data.length;
-          }
-
-          await fileSink.close();
-          _debugPrint('Downloaded $byteCount bytes to $segmentFilePath');
-          return 'Segment $startByte-$endByte downloaded successfully.';
-        } else {
-          attempt++;
-          _debugPrint(
-              'Attempt $attempt failed: Server did not support partial content (status: ${response.statusCode}) for range $startByte-$endByte');
-        }
-      } catch (e) {
-        attempt++;
-        _debugPrint(
-            'Attempt $attempt failed downloading segment $startByte-$endByte: $e');
-      }
-    }
-
-    return 'Error downloading segment $startByte-$endByte after $maxRetries attempts.';
+    });
   }
 
   Future<void> _checkFileIntegrity(String filePath, int expectedSize) async {
@@ -404,20 +363,6 @@ static void _workerMainForPoolQueue(List<dynamic> args) async {
     return await _getFileSizeFromUrl(url);
   }
 
-  void _printProgress(int completedSegments, int totalSegments) {
-    final progress = (completedSegments / totalSegments) * 100;
-    onProgress?.call(progress);
-    const barLength = 40;
-    final filledLength = (progress / 100 * barLength).round();
-    final bar = '=' * filledLength + '-' * (barLength - filledLength);
-
-    stdout.write('\r[$bar] ${progress.toStringAsFixed(2)}% Complete');
-
-    if (progress >= 100) {
-      _debugPrint('\nDownload Complete!');
-    }
-  }
-
   String _getFileNameFromUrl(String url) {
     return url.split('/').last; // Extract file name from URL
   }
@@ -446,113 +391,114 @@ static void _workerMainForPoolQueue(List<dynamic> args) async {
     return false;
   }
 
-Future<void> _downloadSegmentedFixedIsolates(
-    String fileName, String filePath, int totalSize) async {
-  final segmentSize = (totalSize / segmentCount).ceil();
-  int bytesDownloaded = 0; // Track total bytes downloaded across segments
+  Future<void> _downloadSegmentedFixedIsolates(
+      String fileName, String filePath, int totalSize) async {
+    final segmentSize = (totalSize / segmentCount).ceil();
+    int bytesDownloaded = 0; // Track total bytes downloaded across segments
 
-  // Initialize segment files and define ranges
-  List<String> segmentFiles = [];
-  List<Map<String, int>> segmentRanges = [];
-  for (int i = 0; i < segmentCount; i++) {
-    final startByte = i * segmentSize;
-    final endByte = (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
-    segmentRanges.add({'startByte': startByte, 'endByte': endByte});
+    // Initialize segment files and define ranges
+    List<String> segmentFiles = [];
+    List<Map<String, int>> segmentRanges = [];
+    for (int i = 0; i < segmentCount; i++) {
+      final startByte = i * segmentSize;
+      final endByte =
+          (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
+      segmentRanges.add({'startByte': startByte, 'endByte': endByte});
 
-    // Create a segment file path
-    final segmentFile = await _createFile('${fileName}_part$i');
-    segmentFiles.add(segmentFile);
-  }
-
-  // Set up communication ports
-  List<ReceivePort> isolateReceivePorts = [];
-  bool downloadFailed = false;
-  List<Isolate> isolates = [];
-
-  for (int i = 0; i < segmentCount; i++) {
-    final port = ReceivePort();
-    isolateReceivePorts.add(port);
-
-    final isolate = await Isolate.spawn(
-      _workerMainForFixedSegment,
-      [port.sendPort, downloadUrl, segmentRanges[i], segmentFiles[i], maxRetries]
-    );
-    isolates.add(isolate);
-
-    // Listen for messages from each isolate
-    port.listen((message) async {
-      if (message is String && message.startsWith('Error')) {
-        // Handle segment download failure
-        onError?.call("Segment Error");
-        downloadFailed = true;
-      } else if (message is Map<String, dynamic>) {
-        // Update downloaded bytes
-        bytesDownloaded += message['bytesDownloaded'] as int;
-        final progress = (bytesDownloaded / totalSize) * 100;
-        onProgress?.call(progress);
-        _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
-        
-        // Check if all bytes are downloaded
-        if (bytesDownloaded >= totalSize) {
-          _debugPrint('Download Complete!');
-        }
-      }
-    });
-  }
-
-  // Wait for all segments to be processed
-  while (bytesDownloaded < totalSize && !downloadFailed) {
-    await Future.delayed(Duration(milliseconds: 100)); 
-  }
-
-  if (downloadFailed) {
-    _debugPrint('Download failed, cleaning up segment files.');
-    await _cleanupSegmentFiles(segmentFiles);
-    return;
-  }
-
-  await _mergeFileSegments(segmentFiles, filePath);
-  await _checkFileIntegrity(filePath, totalSize);
-  await _cleanupSegmentFiles(segmentFiles);
-}
-
-
-static void _workerMainForFixedSegment(List<dynamic> args) async {
-  SendPort mainSendPort = args[0];
-  final downloadUrl = args[1];
-  final range = args[2] as Map<String, int>;
-  final segmentFilePath = args[3];
-  final maxRetries = args[4];
-  
-  int segmentBytesDownloaded = 0;
-
-  try {
-    final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
-    request.headers.add('Range', 'bytes=${range['startByte']}-${range['endByte']}');
-    final response = await request.close();
-
-    if (response.statusCode == 206) {
-      final file = File(segmentFilePath);
-      final fileSink = file.openWrite();
-
-      await for (var data in response) {
-        fileSink.add(data);
-        segmentBytesDownloaded += data.length;
-        
-        // Send progress update to main isolate
-        mainSendPort.send({'bytesDownloaded': data.length});
-      }
-      await fileSink.close();
-      
-      mainSendPort.send('Segment ${range['startByte']}-${range['endByte']} downloaded successfully.');
-    } else {
-      mainSendPort.send('Error: Server response was ${response.statusCode}');
+      // Create a segment file path
+      final segmentFile = await _createFile('${fileName}_part$i');
+      segmentFiles.add(segmentFile);
     }
-  } catch (e) {
-    mainSendPort.send('Error downloading segment ${range['startByte']}-${range['endByte']}: $e');
-  }
-}
 
+    // Set up communication ports
+    List<ReceivePort> isolateReceivePorts = [];
+    bool downloadFailed = false;
+    List<Isolate> isolates = [];
+
+    for (int i = 0; i < segmentCount; i++) {
+      final port = ReceivePort();
+      isolateReceivePorts.add(port);
+
+      final isolate = await Isolate.spawn(_workerMainForFixedSegment, [
+        port.sendPort,
+        downloadUrl,
+        segmentRanges[i],
+        segmentFiles[i],
+        maxRetries
+      ]);
+      isolates.add(isolate);
+
+      // Listen for messages from each isolate
+      port.listen((message) async {
+        if (message is String && message.startsWith('Error')) {
+          // Handle segment download failure
+          onError?.call("Segment Error");
+          downloadFailed = true;
+        } else if (message is Map<String, dynamic>) {
+          // Update downloaded bytes
+          bytesDownloaded += message['bytesDownloaded'] as int;
+          final progress = (bytesDownloaded / totalSize) * 100;
+          onProgress?.call(progress);
+          _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+
+          // Check if all bytes are downloaded
+          if (bytesDownloaded >= totalSize) {
+            _debugPrint('Download Complete!');
+          }
+        }
+      });
+    }
+
+    // Wait for all segments to be processed
+    while (bytesDownloaded < totalSize && !downloadFailed) {
+      await Future.delayed(Duration(milliseconds: 100));
+    }
+
+    if (downloadFailed) {
+      _debugPrint('Download failed, cleaning up segment files.');
+      await _cleanupSegmentFiles(segmentFiles);
+      return;
+    }
+
+    await _mergeFileSegments(segmentFiles, filePath);
+    await _checkFileIntegrity(filePath, totalSize);
+    await _cleanupSegmentFiles(segmentFiles);
+  }
+
+  static void _workerMainForFixedSegment(List<dynamic> args) async {
+    SendPort mainSendPort = args[0];
+    final downloadUrl = args[1];
+    final range = args[2] as Map<String, int>;
+    final segmentFilePath = args[3];
+
+    try {
+      final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
+      request.headers
+          .add('Range', 'bytes=${range['startByte']}-${range['endByte']}');
+      final response = await request.close();
+
+      if (response.statusCode == 206) {
+        final file = File(segmentFilePath);
+        final fileSink = file.openWrite();
+
+        await for (var data in response) {
+          fileSink.add(data);
+
+          // Send progress update to main isolate
+          mainSendPort.send({'bytesDownloaded': data.length});
+        }
+        await fileSink.close();
+
+        mainSendPort.send(
+            'Segment ${range['startByte']}-${range['endByte']} downloaded successfully.');
+      } else {
+        mainSendPort.send('Error: Server response was ${response.statusCode}');
+      }
+    } catch (e) {
+      mainSendPort.send(
+          'Error downloading segment ${range['startByte']}-${range['endByte']}: $e');
+    }
+  }
 
   void _debugPrint(String message) {
     if (isDebugModeEnabled) {

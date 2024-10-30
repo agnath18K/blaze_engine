@@ -54,6 +54,9 @@ void main() {
     expect(actualFileSize, equals(expectedFileSize),
         reason:
             'Downloaded file size ($actualFileSize) should match expected size ($expectedFileSize).');
+
+    // Print green tick for successful verification
+    print('\u2705 Download verified successfully for: $expectedFilePath');
   }
 
   void printProgressBar(double progress, String filename) {
@@ -62,16 +65,17 @@ void main() {
     final int remaining = barWidth - completed;
 
     // Building the progress bar string
-    final String bar = '[' +
-        ('#' * completed) +
-        ('-' * remaining) +
-        '] ${(progress).toStringAsFixed(2)}%';
+    final String bar =
+        '[${'#' * completed}${'-' * remaining}] ${(progress).toStringAsFixed(2)}%';
 
     stdout.write('\rDownloading $filename $bar');
     if (progress >= 100.0) {
       stdout.write('\n'); // Move to the next line on completion
     }
   }
+
+  // Store results for the summary table
+  final List<Map<String, dynamic>> testResults = [];
 
   for (var testFile in testFiles) {
     final String downloadUrl = testFile['url']!;
@@ -105,10 +109,22 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
+      // Store the results
+      testResults.add({
+        'fileName': expectedFileName,
+        'downloadType': 'Sequential',
+        'workerCount': null,
+        'segmentCount': null,
+        'timeTaken': stopwatch.elapsed.inSeconds,
+        'averageSpeed': transferSpeed.toStringAsFixed(2),
+        'segmentedType': null, // No segmented type for sequential downloads
+      });
+
       print('\n--- Standard Download Test Results ---');
       print('File: $expectedFileName');
       print('Time taken: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
+      print(
+          'Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     test(
@@ -138,10 +154,22 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
+      // Store the results
+      testResults.add({
+        'fileName': expectedFileName,
+        'downloadType': 'Segmented',
+        'workerCount': 4,
+        'segmentCount': 8,
+        'timeTaken': stopwatch.elapsed.inSeconds,
+        'averageSpeed': transferSpeed.toStringAsFixed(2),
+        'segmentedType': 'Worker Pooling', // Specify segmented type
+      });
+
       print('\n--- Segmented Download Test Results ---');
       print('File: $expectedFileName');
       print('Time taken: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
+      print(
+          'Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     test('Segmented Download for $expectedFileName with Fixed Isolates',
@@ -170,10 +198,22 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
+      // Store the results
+      testResults.add({
+        'fileName': expectedFileName,
+        'downloadType': 'Segmented',
+        'workerCount': 4,
+        'segmentCount': 8,
+        'timeTaken': stopwatch.elapsed.inSeconds,
+        'averageSpeed': transferSpeed.toStringAsFixed(2),
+        'segmentedType': 'Fixed Isolates', // Specify segmented type
+      });
+
       print('\n--- Segmented Download Test Results ---');
       print('File: $expectedFileName');
       print('Time taken: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
+      print(
+          'Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     String bestConfig = '';
@@ -210,12 +250,24 @@ void main() {
         final double transferSpeed =
             fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
+        // Store the results
+        testResults.add({
+          'fileName': expectedFileName,
+          'downloadType': 'Segmented',
+          'workerCount': workerCount,
+          'segmentCount': segmentCount,
+          'timeTaken': stopwatch.elapsed.inSeconds,
+          'averageSpeed': transferSpeed.toStringAsFixed(2),
+          'segmentedType': 'Worker Pooling', // Specify segmented type
+        });
+
         print('\n--- Download Test Results ---');
         print('File: $expectedFileName');
         print('Worker Count: $workerCount');
         print('Segment Count: $segmentCount');
         print('Time taken: ${stopwatch.elapsed}');
-        print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
+        print(
+            'Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
 
         if (stopwatch.elapsed < bestTime) {
           bestTime = stopwatch.elapsed;
@@ -227,7 +279,23 @@ void main() {
 
     tearDownAll(() {
       print('\n--- Best Configuration Results ---');
-      print('Best configuration for $expectedFileName: $bestConfig with time: $bestTime');
+      print(
+          'Best configuration for $expectedFileName: $bestConfig with time: $bestTime');
+
+      // Print the summary table of results
+      print('\n--- Summary of All Test Results ---');
+      print(
+          '---------------------------------------------------------------------------------------------------------------------------');
+      print(
+          '| File Name                                 | Download Type | Worker Count | Segment Count | Time Taken (s) | Average Speed (MB/s) | Segmented Type      |');
+      print(
+          '---------------------------------------------------------------------------------------------------------------------------');
+      for (var result in testResults) {
+        print(
+            '| ${result['fileName'].padRight(40)} | ${result['downloadType'].padRight(13)} | ${result['workerCount']?.toString().padRight(12) ?? '-'} | ${result['segmentCount']?.toString().padRight(13) ?? '-'} | ${result['timeTaken'].toString().padRight(15)} | ${result['averageSpeed'].toString().padRight(20)} | ${result['segmentedType']?.padRight(18) ?? '-'} |');
+      }
+      print(
+          '---------------------------------------------------------------------------------------------------------------------------');
     });
   }
 }
