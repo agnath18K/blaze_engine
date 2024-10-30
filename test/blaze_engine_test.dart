@@ -56,6 +56,23 @@ void main() {
             'Downloaded file size ($actualFileSize) should match expected size ($expectedFileSize).');
   }
 
+  void printProgressBar(double progress, String filename) {
+    final int barWidth = 40;
+    final int completed = (progress / 100 * barWidth).round();
+    final int remaining = barWidth - completed;
+
+    // Building the progress bar string
+    final String bar = '[' +
+        ('#' * completed) +
+        ('-' * remaining) +
+        '] ${(progress).toStringAsFixed(2)}%';
+
+    stdout.write('\rDownloading $filename $bar');
+    if (progress >= 100.0) {
+      stdout.write('\n'); // Move to the next line on completion
+    }
+  }
+
   for (var testFile in testFiles) {
     final String downloadUrl = testFile['url']!;
     final String expectedFileName = testFile['filename']!;
@@ -75,6 +92,9 @@ void main() {
         segmentCount: 8,
         workerCount: 4,
         maxRetries: 3,
+        onProgress: (progress) {
+          printProgressBar(progress, expectedFileName);
+        },
       );
 
       await downloader.startDownload();
@@ -85,9 +105,10 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-      print(
-          'Time taken for Standard Download Test for $expectedFileName: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+      print('\n--- Standard Download Test Results ---');
+      print('File: $expectedFileName');
+      print('Time taken: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     test(
@@ -104,6 +125,9 @@ void main() {
         segmentCount: 8,
         workerCount: 4,
         maxRetries: 3,
+        onProgress: (progress) {
+          printProgressBar(progress, expectedFileName);
+        },
       );
 
       await downloader.startDownload();
@@ -114,9 +138,10 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-      print(
-          'Time taken for Segmented Download with Worker Pooling for $expectedFileName: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+      print('\n--- Segmented Download Test Results ---');
+      print('File: $expectedFileName');
+      print('Time taken: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     test('Segmented Download for $expectedFileName with Fixed Isolates',
@@ -132,6 +157,9 @@ void main() {
         segmentCount: 8,
         workerCount: 4,
         maxRetries: 3,
+        onProgress: (progress) {
+          printProgressBar(progress, expectedFileName);
+        },
       );
 
       await downloader.startDownload();
@@ -142,9 +170,10 @@ void main() {
       final double transferSpeed =
           fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-      print(
-          'Time taken for Segmented Download with Fixed Isolates for $expectedFileName: ${stopwatch.elapsed}');
-      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s');
+      print('\n--- Segmented Download Test Results ---');
+      print('File: $expectedFileName');
+      print('Time taken: ${stopwatch.elapsed}');
+      print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
     });
 
     String bestConfig = '';
@@ -168,6 +197,9 @@ void main() {
           segmentCount: segmentCount,
           workerCount: workerCount,
           maxRetries: 3,
+          onProgress: (progress) {
+            printProgressBar(progress, expectedFileName);
+          },
         );
 
         await downloader.startDownload();
@@ -178,10 +210,12 @@ void main() {
         final double transferSpeed =
             fileSize / stopwatch.elapsed.inSeconds / (1024 * 1024); // MB/s
 
-        print(
-            'Time taken for $expectedFileName with Worker Count: $workerCount and Segment Count: $segmentCount: ${stopwatch.elapsed}');
-        print(
-            'Average transfer speed for Worker Count: $workerCount and Segment Count: $segmentCount: ${transferSpeed.toStringAsFixed(2)} MB/s');
+        print('\n--- Download Test Results ---');
+        print('File: $expectedFileName');
+        print('Worker Count: $workerCount');
+        print('Segment Count: $segmentCount');
+        print('Time taken: ${stopwatch.elapsed}');
+        print('Average transfer speed: ${transferSpeed.toStringAsFixed(2)} MB/s\n');
 
         if (stopwatch.elapsed < bestTime) {
           bestTime = stopwatch.elapsed;
@@ -192,8 +226,8 @@ void main() {
     }
 
     tearDownAll(() {
-      print(
-          'Best configuration for $expectedFileName: $bestConfig with time: $bestTime');
+      print('\n--- Best Configuration Results ---');
+      print('Best configuration for $expectedFileName: $bestConfig with time: $bestTime');
     });
   }
 }
