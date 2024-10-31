@@ -1,11 +1,25 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:isolate';
-
-import 'package:blaze_engine/src/download_segment.dart';
 import 'package:hive/hive.dart';
 
 bool isDebugModeEnabled = false;
+
+class DownloadSegment {
+  final int segmentIndex;
+  final int startByte;
+  final int endByte;
+  final String segmentFilePath;
+  final String status;
+
+  DownloadSegment({
+    required this.segmentIndex,
+    required this.startByte,
+    required this.endByte,
+    required this.segmentFilePath,
+    required this.status,
+  });
+}
 
 class BlazeDownloader {
   final String downloadUrl;
@@ -35,6 +49,8 @@ class BlazeDownloader {
   });
 
   Future<void> startDownload() async {
+    // Initialize Hive database with custom directory for storage
+    Hive.init(customDirectory);
     if (segmentCount <= 0 || workerCount <= 0) {
       throw Exception(
           'Segment count and worker count must be greater than zero.');
@@ -175,91 +191,136 @@ class BlazeDownloader {
   }
 
   Future<void> storeSegment(String filename, DownloadSegment segment) async {
-    var box = await openBoxByFilename(filename);
-    await box.put(segment.segmentIndex, {
-      'startByte': segment.startByte,
-      'endByte': segment.endByte,
-      'totalDownloaded': segment.totalDownloaded,
-      'status': segment.status,
-    });
+    try {
+      var box = await openBoxByFilename(filename);
+      await box.put(segment.segmentFilePath, {
+        'segmentFilePath': segment.segmentFilePath,
+        'segmentIndex': segment.segmentIndex,
+        'startByte': segment.startByte,
+        'endByte': segment.endByte,
+        'status': segment.status,
+      });
+    } catch (e) {
+      print('Error storing segment: $e');
+    }
+
+    try {
+      var box = await openBoxByFilename(filename);
+      // Assuming segment.segmentFilePath is the key you used to store the data
+      var storedSegment = await box.get(segment.segmentFilePath);
+
+      if (storedSegment != null) {
+        print('Segment File Path: ${storedSegment['segmentFilePath']}');
+        print('Segment Index: ${storedSegment['segmentIndex']}');
+        print('Start Byte: ${storedSegment['startByte']}');
+        print('End Byte: ${storedSegment['endByte']}');
+        print('Status: ${storedSegment['status']}');
+      } else {
+        print('No segment found for key: ${segment.segmentFilePath}');
+      }
+    } catch (e) {
+      print('Error reading segment: $e');
+    }
   }
 
-  Future<List<DownloadSegment>> getAllSegments(String filename) async {
-    var box = await openBoxByFilename(filename);
-    List<DownloadSegment> segments = [];
+  Future<void> storeSegmentStatus(String segmentFilePath, String status) async {
+    print("completed : $segmentFilePath");
+    Hive.init(customDirectory);
+    final fileName = _getFileNameFromUrl(downloadUrl);
 
-    for (var key in box.keys) {
-      var segmentData = box.get(key);
-      segments.add(DownloadSegment(
-        segmentIndex: key,
-        startByte: segmentData['startByte'],
-        endByte: segmentData['endByte'],
-        totalDownloaded: segmentData['totalDownloaded'],
-        status: segmentData['status'],
-      ));
+    // Open the box for storing segment information
+    openBoxByFilename(fileName);
+
+    try {
+      var box = await openBoxByFilename(fileName);
+
+      // Retrieve the existing segment data using the segmentFilePath as the key
+      var existingSegment = await box.get(segmentFilePath);
+
+      // Check if the segment exists
+      if (existingSegment != null) {
+        // Update only the 'status' field
+        existingSegment['status'] = "completed";
+
+        // Save the updated segment back to the box
+        await box.put(segmentFilePath, existingSegment);
+      } else {
+        print('Segment not found.');
+      }
+    } catch (e) {
+      print('Error storing segment: $e');
     }
-    return segments;
   }
 
   Future<void> _downloadSegmentedWithWorkerPool(
       String fileName, String filePath, int totalSize) async {
+    // Calculate the size of each segment based on the total size and segment count
     final segmentSize = (totalSize / segmentCount).ceil();
+
+    // Lists to keep track of worker receive ports, segment files, and download tasks
     List<ReceivePort> workerReceivePorts = [];
     List<String> segmentFiles = [];
     List<Map<String, int>> downloadSegmentQueue = [];
-    int bytesDownloaded = 0; // Track total bytes downloaded across segments
 
-    Hive.init(customDirectory);
+    // Variable to track total bytes downloaded across all segments
+    int bytesDownloaded = 0;
+
+    // Open the box for storing segment information
     openBoxByFilename(fileName);
 
     // Prepare segment queue and segment file paths
     for (int i = 0; i < segmentCount; i++) {
+      // Calculate the start and end byte for the current segment
       final startByte = i * segmentSize;
-      final endByte =
-          (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
+      final endByte = (i == segmentCount - 1)
+          ? totalSize - 1 // Last segment might be shorter
+          : startByte + segmentSize - 1;
+
+      // Add the start and end bytes to the queue for download tasks
       downloadSegmentQueue.add({'startByte': startByte, 'endByte': endByte});
 
-      // Create a segment file path
+      // Create a file path for the segment file
       final segmentFile = await _createFile('${fileName}_part$i');
       segmentFiles.add(segmentFile);
 
+      // Store segment information in the Hive database
       storeSegment(
           fileName,
           DownloadSegment(
+              segmentFilePath: segmentFile,
               segmentIndex: i,
               startByte: startByte,
               endByte: endByte,
-              totalDownloaded: 0,
-              status: "pending"));
+              status: "pending")); // Set initial status to pending
     }
 
-    // Retrieve and print all segments for the filename
-    var segments = await getAllSegments(fileName);
-    for (var seg in segments) {
-      print('Segment Index: ${seg.segmentIndex}');
-      print('Start Byte: ${seg.startByte}');
-      print('End Byte: ${seg.endByte}');
-      print('Total Downloaded: ${seg.totalDownloaded}');
-      print('Status: ${seg.status}\n');
-    }
-
+    // Debug print statement to indicate the number of workers to be created
     _debugPrint('Starting worker creation with $workerCount workers.');
+
+    // Variable to track if any download has failed
     bool downloadFailed = false;
+
+    // List to keep track of the isolates (workers)
     List<Isolate> workers = [];
 
+    // Create worker isolates
     for (int i = 0; i < workerCount; i++) {
-      final port = ReceivePort();
-      workerReceivePorts.add(port);
+      final port = ReceivePort(); // Create a new receive port for the worker
+      workerReceivePorts.add(port); // Store the port for later use
 
+      // Spawn a new isolate (worker) and pass the receive port and context
       final worker =
           await Isolate.spawn(_workerMainForPoolQueue, [port.sendPort, this]);
-      workers.add(worker);
+      workers.add(worker); // Keep track of the spawned worker
 
+      // Listen for messages from the worker
       port.listen((message) async {
         if (message is SendPort) {
-          // Assign tasks to the worker
+          // Assign download tasks to the worker when it sends its send port
           while (downloadSegmentQueue.isNotEmpty) {
+            // Remove the first task from the queue
             final task = downloadSegmentQueue.removeAt(0);
+            // Send the task details to the worker for processing
             message.send([
               task['startByte'],
               task['endByte'],
@@ -270,17 +331,19 @@ class BlazeDownloader {
             ]);
           }
         } else if (message is String && message.startsWith('Error')) {
+          // Handle error messages from the worker
           onError?.call("Segment Error");
-          downloadFailed = true;
+          downloadFailed = true; // Mark the download as failed
         } else if (message is Map<String, dynamic>) {
-          // Update downloaded bytes and calculate progress
+          // Update the total bytes downloaded and calculate progress
           bytesDownloaded += message['bytesDownloaded'] as int;
           final progress = (bytesDownloaded / totalSize) * 100;
-          onProgress?.call(progress);
-          _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+          onProgress?.call(progress); // Call the progress callback
+          _debugPrint(
+              'Progress: ${progress.toStringAsFixed(2)}%'); // Print progress
 
           if (bytesDownloaded >= totalSize) {
-            _debugPrint('Download Complete!');
+            _debugPrint('Download Complete!'); // Indicate download completion
           }
         }
       });
@@ -288,17 +351,24 @@ class BlazeDownloader {
 
     // Wait for all segments to be processed
     while (bytesDownloaded < totalSize && !downloadFailed) {
-      await Future.delayed(Duration(milliseconds: 100));
+      await Future.delayed(Duration(milliseconds: 100)); // Polling delay
     }
 
+    // If the download failed, clean up the segment files
     if (downloadFailed) {
       _debugPrint('Download failed, cleaning up segment files.');
-      await _cleanupSegmentFiles(segmentFiles);
-      return;
+      await _cleanupSegmentFiles(
+          segmentFiles); // Clean up created segment files
+      return; // Exit the function
     }
 
+    // All segments downloaded successfully; merge them into a single file
     await _mergeFileSegments(segmentFiles, filePath);
+
+    // Check the integrity of the downloaded file
     await _checkFileIntegrity(filePath, totalSize);
+
+    // Clean up temporary segment files
     await _cleanupSegmentFiles(segmentFiles);
   }
 
@@ -320,6 +390,7 @@ class BlazeDownloader {
 
   static void _workerMainForPoolQueue(List<dynamic> args) async {
     SendPort mainSendPort = args[0];
+    BlazeDownloader downloader = args[1];
 
     ReceivePort workerReceivePort = ReceivePort();
     mainSendPort.send(workerReceivePort.sendPort);
@@ -348,6 +419,8 @@ class BlazeDownloader {
             }
             await fileSink.close();
 
+            // Update the segment status to completed in Hive
+            await downloader.storeSegmentStatus(segmentFilePath, "completed");
             mainSendPort
                 .send('Segment $startByte-$endByte downloaded successfully.');
           } else {
