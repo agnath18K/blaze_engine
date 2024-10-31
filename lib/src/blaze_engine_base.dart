@@ -2,6 +2,9 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:blaze_engine/src/download_segment.dart';
+import 'package:hive/hive.dart';
+
 bool isDebugModeEnabled = false;
 
 class BlazeDownloader {
@@ -167,6 +170,37 @@ class BlazeDownloader {
     return 0;
   }
 
+  Future<Box> openBoxByFilename(String filename) async {
+    return await Hive.openBox(filename);
+  }
+
+  Future<void> storeSegment(String filename, DownloadSegment segment) async {
+    var box = await openBoxByFilename(filename);
+    await box.put(segment.segmentIndex, {
+      'startByte': segment.startByte,
+      'endByte': segment.endByte,
+      'totalDownloaded': segment.totalDownloaded,
+      'status': segment.status,
+    });
+  }
+
+  Future<List<DownloadSegment>> getAllSegments(String filename) async {
+    var box = await openBoxByFilename(filename);
+    List<DownloadSegment> segments = [];
+
+    for (var key in box.keys) {
+      var segmentData = box.get(key);
+      segments.add(DownloadSegment(
+        segmentIndex: key,
+        startByte: segmentData['startByte'],
+        endByte: segmentData['endByte'],
+        totalDownloaded: segmentData['totalDownloaded'],
+        status: segmentData['status'],
+      ));
+    }
+    return segments;
+  }
+
   Future<void> _downloadSegmentedWithWorkerPool(
       String fileName, String filePath, int totalSize) async {
     final segmentSize = (totalSize / segmentCount).ceil();
@@ -174,6 +208,9 @@ class BlazeDownloader {
     List<String> segmentFiles = [];
     List<Map<String, int>> downloadSegmentQueue = [];
     int bytesDownloaded = 0; // Track total bytes downloaded across segments
+
+    Hive.init(customDirectory);
+    openBoxByFilename(fileName);
 
     // Prepare segment queue and segment file paths
     for (int i = 0; i < segmentCount; i++) {
@@ -185,6 +222,25 @@ class BlazeDownloader {
       // Create a segment file path
       final segmentFile = await _createFile('${fileName}_part$i');
       segmentFiles.add(segmentFile);
+
+      storeSegment(
+          fileName,
+          DownloadSegment(
+              segmentIndex: i,
+              startByte: startByte,
+              endByte: endByte,
+              totalDownloaded: 0,
+              status: "pending"));
+    }
+
+    // Retrieve and print all segments for the filename
+    var segments = await getAllSegments(fileName);
+    for (var seg in segments) {
+      print('Segment Index: ${seg.segmentIndex}');
+      print('Start Byte: ${seg.startByte}');
+      print('End Byte: ${seg.endByte}');
+      print('Total Downloaded: ${seg.totalDownloaded}');
+      print('Status: ${seg.status}\n');
     }
 
     _debugPrint('Starting worker creation with $workerCount workers.');

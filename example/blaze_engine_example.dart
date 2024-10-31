@@ -6,7 +6,11 @@ void main() async {
       sequentialDownload: false,
       enableWorkerPooling: true,
       downloadUrl:
-          'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso',
-      customDirectory: 'download');
+          'https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso.zsync',
+      customDirectory: 'download',
+      onProgress: (progress) {
+        // print('Progress : $progress');
+      });
+
   await downloader.startDownload();
 }
