@@ -1,8 +1,7 @@
-/// Support for doing something awesome.
-///
-/// More dartdocs go here.
 library;
 
 export 'src/blaze_engine_base.dart';
-
-// TODO: Export any libraries intended for clients of this package.
+export 'src/sequential_download.dart';
+export 'src/segmented_download.dart';
+export 'src/utilities.dart';
+export 'src/logger.dart';

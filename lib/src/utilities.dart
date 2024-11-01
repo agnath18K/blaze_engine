@@ -1,14 +1,6 @@
 import 'dart:io';
 
-bool isDebugModeEnabled = false;
-
 class Utilities {
-  static void debugPrint(String message) {
-    if (isDebugModeEnabled) {
-      print(message);
-    }
-  }
-
   static String getFileNameFromUrl(String url) {
     return url.split('/').last;
   }
