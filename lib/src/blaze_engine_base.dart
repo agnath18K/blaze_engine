@@ -1,25 +1,9 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:isolate';
+import 'package:blaze_engine/src/download_segment.dart';
+import 'package:blaze_engine/src/utilities.dart';
 import 'package:hive/hive.dart';
-
-bool isDebugModeEnabled = false;
-
-class DownloadSegment {
-  final int segmentIndex;
-  final int startByte;
-  final int endByte;
-  final String segmentFilePath;
-  final String status;
-
-  DownloadSegment({
-    required this.segmentIndex,
-    required this.startByte,
-    required this.endByte,
-    required this.segmentFilePath,
-    required this.status,
-  });
-}
 
 class BlazeDownloader {
   final String downloadUrl;
@@ -49,7 +33,6 @@ class BlazeDownloader {
   });
 
   Future<void> startDownload() async {
-    // Initialize Hive database with custom directory for storage
     Hive.init(customDirectory);
     if (segmentCount <= 0 || workerCount <= 0) {
       throw Exception(
@@ -57,59 +40,64 @@ class BlazeDownloader {
     }
 
     DateTime startTime = DateTime.now();
-    _debugPrint("Download initiated at: ${startTime.toIso8601String()}");
+    Utilities.debugPrint(
+        "Download initiated at: ${startTime.toIso8601String()}");
 
-    final fileName = _getFileNameFromUrl(downloadUrl);
-    final filePath = await _createFile(fileName);
-    _debugPrint("File name extracted: $fileName");
-    _debugPrint("File will be saved at: $filePath");
+    final fileName = Utilities.getFileNameFromUrl(downloadUrl);
+
+    final filePath = await Utilities.createFile(customDirectory, fileName);
+    Utilities.debugPrint("File name extracted: $fileName");
+    Utilities.debugPrint("File will be saved at: $filePath");
 
     try {
       final totalSize = await _getFileSizeFromUrl(downloadUrl);
       if (totalSize == 0) {
-        _debugPrint('Could not retrieve file size. Aborting download.');
-        _debugPrint("Aborting download due to zero file size.");
+        Utilities.debugPrint(
+            'Could not retrieve file size. Aborting download.');
+        Utilities.debugPrint("Aborting download due to zero file size.");
         return;
       }
-      _debugPrint("Total file size retrieved: $totalSize bytes");
+      Utilities.debugPrint("Total file size retrieved: $totalSize bytes");
 
       if (sequentialDownload) {
-        _debugPrint("Sequential download mode enabled.");
+        Utilities.debugPrint("Sequential download mode enabled.");
         final canResume = await _supportsRangeRequests(downloadUrl);
         if (canResume) {
-          _debugPrint("Server supports range requests. Resuming download...");
+          Utilities.debugPrint(
+              "Server supports range requests. Resuming download...");
           await _downloadSequential(filePath, totalSize);
         } else {
-          _debugPrint(
+          Utilities.debugPrint(
               'Resume capability not supported, downloading the entire file...');
           await _downloadSequential(filePath, totalSize);
         }
       } else {
         if (enableWorkerPooling) {
-          _debugPrint("Pool queue mode enabled for segmented download.");
+          Utilities.debugPrint(
+              "Pool queue mode enabled for segmented download.");
           await _downloadSegmentedWithWorkerPool(fileName, filePath, totalSize);
         } else {
-          _debugPrint("Fixed isolates mode enabled for segmented download.");
+          Utilities.debugPrint(
+              "Fixed isolates mode enabled for segmented download.");
           await _downloadSegmentedFixedIsolates(fileName, filePath, totalSize);
         }
       }
       onComplete?.call(filePath);
       DateTime endTime = DateTime.now();
-      _debugPrint("Download completed at: ${endTime.toIso8601String()}");
+      Utilities.debugPrint(
+          "Download completed at: ${endTime.toIso8601String()}");
 
-      // Calculate the difference
       Duration difference = endTime.difference(startTime);
 
-      // _debugPrint the difference in days, hours, minutes, and seconds
-      _debugPrint("Download Duration:");
-      _debugPrint("${difference.inDays} days");
-      _debugPrint("${difference.inHours % 24} hours");
-      _debugPrint("${difference.inMinutes % 60} minutes");
-      _debugPrint("${difference.inSeconds % 60} seconds");
+      Utilities.debugPrint("Download Duration:");
+      Utilities.debugPrint("${difference.inDays} days");
+      Utilities.debugPrint("${difference.inHours % 24} hours");
+      Utilities.debugPrint("${difference.inMinutes % 60} minutes");
+      Utilities.debugPrint("${difference.inSeconds % 60} seconds");
     } catch (e) {
-      _debugPrint('Error during download: $e');
+      Utilities.debugPrint('Error during download: $e');
       onError?.call(e.toString());
-      _debugPrint("An error occurred during the download process: $e");
+      Utilities.debugPrint("An error occurred during the download process: $e");
     }
   }
 
@@ -120,12 +108,12 @@ class BlazeDownloader {
     if (allowResume && await file.exists()) {
       startByte = await _getFileSizeFromPath(filePath);
       if (startByte >= totalSize) {
-        _debugPrint('File already downloaded: $filePath');
+        Utilities.debugPrint('File already downloaded: $filePath');
         return;
       }
-      _debugPrint('Resuming download from byte: $startByte');
+      Utilities.debugPrint('Resuming download from byte: $startByte');
     } else {
-      _debugPrint('Starting new download...');
+      Utilities.debugPrint('Starting new download...');
     }
 
     final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
@@ -136,7 +124,6 @@ class BlazeDownloader {
     final response = await request.close();
 
     if (response.statusCode == 206 || response.statusCode == 200) {
-      // Initialize bytes downloaded for this session
       int bytesDownloaded = startByte;
 
       final fileSink = file.openWrite(mode: FileMode.append);
@@ -145,25 +132,17 @@ class BlazeDownloader {
         fileSink.add(data);
         bytesDownloaded += data.length;
 
-        // Calculate progress
         final progress = (bytesDownloaded / totalSize) * 100;
-        onProgress?.call(progress); // Update progress
-        _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+        onProgress?.call(progress);
+        Utilities.debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
       }
 
       await fileSink.close();
       await _checkFileIntegrity(filePath, totalSize);
     } else {
-      _debugPrint('Download failed with status code: ${response.statusCode}');
+      Utilities.debugPrint(
+          'Download failed with status code: ${response.statusCode}');
     }
-  }
-
-  Future<String> _createFile(String fileName) async {
-    final directory = Directory(customDirectory);
-    if (!await directory.exists()) {
-      await directory.create(recursive: true);
-    }
-    return '${directory.path}/$fileName';
   }
 
   Future<int> _getFileSizeFromUrl(String url) async {
@@ -176,11 +155,11 @@ class BlazeDownloader {
           return int.parse(contentLength);
         }
       } else {
-        _debugPrint(
+        Utilities.debugPrint(
             'Failed to get file size with status code: ${response.statusCode}');
       }
     } catch (e) {
-      _debugPrint('Error while getting file size: $e');
+      Utilities.debugPrint('Error while getting file size: $e');
       onError?.call(e.toString());
     }
     return 0;
@@ -206,7 +185,7 @@ class BlazeDownloader {
 
     try {
       var box = await openBoxByFilename(filename);
-      // Assuming segment.segmentFilePath is the key you used to store the data
+
       var storedSegment = await box.get(segment.segmentFilePath);
 
       if (storedSegment != null) {
@@ -226,23 +205,18 @@ class BlazeDownloader {
   Future<void> storeSegmentStatus(String segmentFilePath, String status) async {
     print("completed : $segmentFilePath");
     Hive.init(customDirectory);
-    final fileName = _getFileNameFromUrl(downloadUrl);
+    final fileName = Utilities.getFileNameFromUrl(downloadUrl);
 
-    // Open the box for storing segment information
     openBoxByFilename(fileName);
 
     try {
       var box = await openBoxByFilename(fileName);
 
-      // Retrieve the existing segment data using the segmentFilePath as the key
       var existingSegment = await box.get(segmentFilePath);
 
-      // Check if the segment exists
       if (existingSegment != null) {
-        // Update only the 'status' field
         existingSegment['status'] = "completed";
 
-        // Save the updated segment back to the box
         await box.put(segmentFilePath, existingSegment);
       } else {
         print('Segment not found.');
@@ -254,36 +228,27 @@ class BlazeDownloader {
 
   Future<void> _downloadSegmentedWithWorkerPool(
       String fileName, String filePath, int totalSize) async {
-    // Calculate the size of each segment based on the total size and segment count
     final segmentSize = (totalSize / segmentCount).ceil();
 
-    // Lists to keep track of worker receive ports, segment files, and download tasks
     List<ReceivePort> workerReceivePorts = [];
     List<String> segmentFiles = [];
     List<Map<String, int>> downloadSegmentQueue = [];
 
-    // Variable to track total bytes downloaded across all segments
     int bytesDownloaded = 0;
 
-    // Open the box for storing segment information
     openBoxByFilename(fileName);
 
-    // Prepare segment queue and segment file paths
     for (int i = 0; i < segmentCount; i++) {
-      // Calculate the start and end byte for the current segment
       final startByte = i * segmentSize;
-      final endByte = (i == segmentCount - 1)
-          ? totalSize - 1 // Last segment might be shorter
-          : startByte + segmentSize - 1;
+      final endByte =
+          (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
 
-      // Add the start and end bytes to the queue for download tasks
       downloadSegmentQueue.add({'startByte': startByte, 'endByte': endByte});
 
-      // Create a file path for the segment file
-      final segmentFile = await _createFile('${fileName}_part$i');
+      final segmentFile =
+          await Utilities.createFile(customDirectory, '${fileName}_part$i');
       segmentFiles.add(segmentFile);
 
-      // Store segment information in the Hive database
       storeSegment(
           fileName,
           DownloadSegment(
@@ -291,36 +256,28 @@ class BlazeDownloader {
               segmentIndex: i,
               startByte: startByte,
               endByte: endByte,
-              status: "pending")); // Set initial status to pending
+              status: "pending"));
     }
 
-    // Debug print statement to indicate the number of workers to be created
-    _debugPrint('Starting worker creation with $workerCount workers.');
+    Utilities.debugPrint('Starting worker creation with $workerCount workers.');
 
-    // Variable to track if any download has failed
     bool downloadFailed = false;
 
-    // List to keep track of the isolates (workers)
     List<Isolate> workers = [];
 
-    // Create worker isolates
     for (int i = 0; i < workerCount; i++) {
-      final port = ReceivePort(); // Create a new receive port for the worker
-      workerReceivePorts.add(port); // Store the port for later use
+      final port = ReceivePort();
+      workerReceivePorts.add(port);
 
-      // Spawn a new isolate (worker) and pass the receive port and context
       final worker =
           await Isolate.spawn(_workerMainForPoolQueue, [port.sendPort, this]);
-      workers.add(worker); // Keep track of the spawned worker
+      workers.add(worker);
 
-      // Listen for messages from the worker
       port.listen((message) async {
         if (message is SendPort) {
-          // Assign download tasks to the worker when it sends its send port
           while (downloadSegmentQueue.isNotEmpty) {
-            // Remove the first task from the queue
             final task = downloadSegmentQueue.removeAt(0);
-            // Send the task details to the worker for processing
+
             message.send([
               task['startByte'],
               task['endByte'],
@@ -331,44 +288,35 @@ class BlazeDownloader {
             ]);
           }
         } else if (message is String && message.startsWith('Error')) {
-          // Handle error messages from the worker
           onError?.call("Segment Error");
-          downloadFailed = true; // Mark the download as failed
+          downloadFailed = true;
         } else if (message is Map<String, dynamic>) {
-          // Update the total bytes downloaded and calculate progress
           bytesDownloaded += message['bytesDownloaded'] as int;
           final progress = (bytesDownloaded / totalSize) * 100;
-          onProgress?.call(progress); // Call the progress callback
-          _debugPrint(
-              'Progress: ${progress.toStringAsFixed(2)}%'); // Print progress
+          onProgress?.call(progress);
+          Utilities.debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
 
           if (bytesDownloaded >= totalSize) {
-            _debugPrint('Download Complete!'); // Indicate download completion
+            Utilities.debugPrint('Download Complete!');
           }
         }
       });
     }
 
-    // Wait for all segments to be processed
     while (bytesDownloaded < totalSize && !downloadFailed) {
-      await Future.delayed(Duration(milliseconds: 100)); // Polling delay
+      await Future.delayed(Duration(milliseconds: 100));
     }
 
-    // If the download failed, clean up the segment files
     if (downloadFailed) {
-      _debugPrint('Download failed, cleaning up segment files.');
-      await _cleanupSegmentFiles(
-          segmentFiles); // Clean up created segment files
-      return; // Exit the function
+      Utilities.debugPrint('Download failed, cleaning up segment files.');
+      await _cleanupSegmentFiles(segmentFiles);
+      return;
     }
 
-    // All segments downloaded successfully; merge them into a single file
     await _mergeFileSegments(segmentFiles, filePath);
 
-    // Check the integrity of the downloaded file
     await _checkFileIntegrity(filePath, totalSize);
 
-    // Clean up temporary segment files
     await _cleanupSegmentFiles(segmentFiles);
   }
 
@@ -379,10 +327,10 @@ class BlazeDownloader {
         final fileStat = await file.stat();
         return fileStat.size;
       } else {
-        _debugPrint('File does not exist: $filePath');
+        Utilities.debugPrint('File does not exist: $filePath');
       }
     } catch (e) {
-      _debugPrint('Error while getting file size: $e');
+      Utilities.debugPrint('Error while getting file size: $e');
       onError?.call(e.toString());
     }
     return 0;
@@ -414,12 +362,10 @@ class BlazeDownloader {
             await for (var data in response) {
               fileSink.add(data);
 
-              // Send progress update to main isolate
               mainSendPort.send({'bytesDownloaded': data.length});
             }
             await fileSink.close();
 
-            // Update the segment status to completed in Hive
             await downloader.storeSegmentStatus(segmentFilePath, "completed");
             mainSendPort
                 .send('Segment $startByte-$endByte downloaded successfully.');
@@ -438,10 +384,10 @@ class BlazeDownloader {
   Future<void> _checkFileIntegrity(String filePath, int expectedSize) async {
     final downloadedSize = await _getFileSizeFromPath(filePath);
     if (expectedSize == downloadedSize) {
-      _debugPrint(
+      Utilities.debugPrint(
           'Download completed successfully: $filePath, Size: $downloadedSize bytes');
     } else {
-      _debugPrint(
+      Utilities.debugPrint(
           'File corrupted: Expected size $expectedSize bytes, but got $downloadedSize bytes');
     }
   }
@@ -455,18 +401,19 @@ class BlazeDownloader {
       for (String segmentFile in segmentFiles) {
         final segment = File(segmentFile);
         if (!await segment.exists()) {
-          _debugPrint('Segment file does not exist: $segmentFile');
+          Utilities.debugPrint('Segment file does not exist: $segmentFile');
           return;
         }
 
         await for (var data in segment.openRead()) {
           sink.add(data);
         }
-        _debugPrint('Merged segment file: $segmentFile into $outputFilePath');
+        Utilities.debugPrint(
+            'Merged segment file: $segmentFile into $outputFilePath');
       }
-      _debugPrint('Merged file created at: ${outputFile.path}');
+      Utilities.debugPrint('Merged file created at: ${outputFile.path}');
     } catch (e) {
-      _debugPrint('Error merging file segments: $e');
+      Utilities.debugPrint('Error merging file segments: $e');
       onError?.call(e.toString());
     } finally {
       await sink.close();
@@ -479,10 +426,11 @@ class BlazeDownloader {
         final file = File(segmentFile);
         if (await file.exists()) {
           await file.delete();
-          _debugPrint('Deleted segment file: $segmentFile');
+          Utilities.debugPrint('Deleted segment file: $segmentFile');
         }
       } catch (e) {
-        _debugPrint('Error deleting segment file: $segmentFile, Error: $e');
+        Utilities.debugPrint(
+            'Error deleting segment file: $segmentFile, Error: $e');
         onError?.call(e.toString());
       }
     }
@@ -490,10 +438,6 @@ class BlazeDownloader {
 
   Future<int> getFileSizeFromUrl(String url) async {
     return await _getFileSizeFromUrl(url);
-  }
-
-  String _getFileNameFromUrl(String url) {
-    return url.split('/').last; // Extract file name from URL
   }
 
   Future<bool> _supportsRangeRequests(String url) async {
@@ -504,17 +448,17 @@ class BlazeDownloader {
       if (response.statusCode == 200) {
         final acceptRanges = response.headers.value('Accept-Ranges');
         if (acceptRanges == 'bytes') {
-          _debugPrint('Server supports resume capability.');
+          Utilities.debugPrint('Server supports resume capability.');
           return true;
         } else {
-          _debugPrint('Server does not support resume capability.');
+          Utilities.debugPrint('Server does not support resume capability.');
         }
       } else {
-        _debugPrint(
+        Utilities.debugPrint(
             'Failed to check resume capability with status code: ${response.statusCode}');
       }
     } catch (e) {
-      _debugPrint('Error while checking resume capability: $e');
+      Utilities.debugPrint('Error while checking resume capability: $e');
       onError?.call(e.toString());
     }
     return false;
@@ -523,9 +467,8 @@ class BlazeDownloader {
   Future<void> _downloadSegmentedFixedIsolates(
       String fileName, String filePath, int totalSize) async {
     final segmentSize = (totalSize / segmentCount).ceil();
-    int bytesDownloaded = 0; // Track total bytes downloaded across segments
+    int bytesDownloaded = 0;
 
-    // Initialize segment files and define ranges
     List<String> segmentFiles = [];
     List<Map<String, int>> segmentRanges = [];
     for (int i = 0; i < segmentCount; i++) {
@@ -534,12 +477,11 @@ class BlazeDownloader {
           (i == segmentCount - 1) ? totalSize - 1 : startByte + segmentSize - 1;
       segmentRanges.add({'startByte': startByte, 'endByte': endByte});
 
-      // Create a segment file path
-      final segmentFile = await _createFile('${fileName}_part$i');
+      final segmentFile =
+          await Utilities.createFile(customDirectory, '${fileName}_part$i');
       segmentFiles.add(segmentFile);
     }
 
-    // Set up communication ports
     List<ReceivePort> isolateReceivePorts = [];
     bool downloadFailed = false;
     List<Isolate> isolates = [];
@@ -557,34 +499,29 @@ class BlazeDownloader {
       ]);
       isolates.add(isolate);
 
-      // Listen for messages from each isolate
       port.listen((message) async {
         if (message is String && message.startsWith('Error')) {
-          // Handle segment download failure
           onError?.call("Segment Error");
           downloadFailed = true;
         } else if (message is Map<String, dynamic>) {
-          // Update downloaded bytes
           bytesDownloaded += message['bytesDownloaded'] as int;
           final progress = (bytesDownloaded / totalSize) * 100;
           onProgress?.call(progress);
-          _debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
+          Utilities.debugPrint('Progress: ${progress.toStringAsFixed(2)}%');
 
-          // Check if all bytes are downloaded
           if (bytesDownloaded >= totalSize) {
-            _debugPrint('Download Complete!');
+            Utilities.debugPrint('Download Complete!');
           }
         }
       });
     }
 
-    // Wait for all segments to be processed
     while (bytesDownloaded < totalSize && !downloadFailed) {
       await Future.delayed(Duration(milliseconds: 100));
     }
 
     if (downloadFailed) {
-      _debugPrint('Download failed, cleaning up segment files.');
+      Utilities.debugPrint('Download failed, cleaning up segment files.');
       await _cleanupSegmentFiles(segmentFiles);
       return;
     }
@@ -613,7 +550,6 @@ class BlazeDownloader {
         await for (var data in response) {
           fileSink.add(data);
 
-          // Send progress update to main isolate
           mainSendPort.send({'bytesDownloaded': data.length});
         }
         await fileSink.close();
@@ -626,12 +562,6 @@ class BlazeDownloader {
     } catch (e) {
       mainSendPort.send(
           'Error downloading segment ${range['startByte']}-${range['endByte']}: $e');
-    }
-  }
-
-  void _debugPrint(String message) {
-    if (isDebugModeEnabled) {
-      print(message);
     }
   }
 }
